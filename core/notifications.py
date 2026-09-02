@@ -43,13 +43,16 @@ def send_discord_signal(symbol: str, side: str, price: float, strategy: str, ai_
         response = requests.post(webhook_url, json=payload, timeout=5.0)
         response.raise_for_status()
         logger.info(f"Discord webhook sent successfully. Status code: {response.status_code}")
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Failed to send Discord notification: {e}")
+    except requests.exceptions.RequestException:
+        logger.error("Failed to send Discord notification: HTTP Request Exception. Check webhook validity.")
+    except Exception:
+        logger.error("Failed to send Discord notification: Unexpected Error.")
 
 def send_heartbeat(status: str):
     """Sends a lightweight heartbeat to Discord."""
-    webhook_url = settings.DISCORD_WEBHOOK_URL
+    webhook_url = getattr(settings, "DISCORD_WEBHOOK_URL", None)
     if not webhook_url:
+        logger.warning("DISCORD_WEBHOOK_URL is not set. Skipping Discord heartbeat.")
         return
         
     payload = {
@@ -62,6 +65,9 @@ def send_heartbeat(status: str):
     
     try:
         response = requests.post(webhook_url, json=payload, timeout=5.0)
+        response.raise_for_status()
         logger.info(f"Heartbeat sent successfully. Status code: {response.status_code}")
-    except Exception as e:
-        logger.error(f"Failed to send heartbeat: {e}")
+    except requests.exceptions.RequestException:
+        logger.error("Failed to send heartbeat: HTTP Request Exception. Check network or webhook validity.")
+    except Exception:
+        logger.error("Failed to send heartbeat: Unexpected Error.")
