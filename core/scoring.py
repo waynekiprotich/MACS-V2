@@ -44,11 +44,11 @@ def calculate_technical_score(row: pd.Series) -> float:
         return 50.0
 
 def get_ai_analysis(context_df: pd.DataFrame) -> float:
-    """Uses Gemini API for market sentiment scoring, returning a score from 0-10."""
+    """Uses Gemini API for market sentiment scoring, returning a score from 0-100."""
     api_key = settings.GEMINI_API_KEY
     if not api_key:
-        logger.warning("GEMINI_API_KEY not set. Defaulting AI score to 0.")
-        return 0.0
+        logger.warning("GEMINI_API_KEY not set. Returning None for AI score.")
+        return None
 
     try:
         genai.configure(api_key=api_key)
@@ -74,8 +74,8 @@ def get_ai_analysis(context_df: pd.DataFrame) -> float:
         thread.join(timeout=45.0)
         
         if thread.is_alive():
-            logger.warning("Gemini API Timeout: 45s deadline exceeded. Defaulting AI score to 0.")
-            return 0.0
+            logger.warning("Gemini API Timeout: 45s deadline exceeded. Returning None for AI score.")
+            return None
             
         if isinstance(result[0], Exception):
             raise result[0]
@@ -88,17 +88,17 @@ def get_ai_analysis(context_df: pd.DataFrame) -> float:
         match = re.search(r'([0-9.]+)', score_text)
         if match:
             return min(100.0, max(0.0, float(match.group(1)) * 10))
-        return 0.0
+        return None
         
     except concurrent.futures.TimeoutError:
-        logger.warning("Gemini API Timeout: 45s deadline exceeded. Defaulting AI score to 0.")
-        return 0.0
+        logger.warning("Gemini API Timeout: 45s deadline exceeded. Returning None for AI score.")
+        return None
     except GoogleAPIError as e:
-        logger.warning(f"Gemini API GoogleAPIError (auth/network): {e}. Defaulting AI score to 0.")
-        return 0.0
+        logger.warning(f"Gemini API GoogleAPIError (auth/network): {e}. Returning None for AI score.")
+        return None
     except Exception as e:
-        logger.warning(f"Unexpected error calling Gemini API: {e}. Defaulting AI score to 0.")
-        return 0.0
+        logger.warning(f"Unexpected error calling Gemini API: {e}. Returning None for AI score.")
+        return None
 
 def score_data(df: pd.DataFrame) -> pd.DataFrame:
     """Apply scoring to dataframe."""

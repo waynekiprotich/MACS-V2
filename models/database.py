@@ -33,11 +33,35 @@ class PaperTrade(Base):
     side = Column(String, nullable=False)
     quantity = Column(Float, nullable=False)
     price = Column(Float, nullable=False)
-    status = Column(String, nullable=False, default="pending")
+    status = Column(String, nullable=False, default="OPEN")
     order_id = Column(String, nullable=True, unique=True)
     reason = Column(String, nullable=True)
     pnl = Column(Float, nullable=True)
+    proposal_id = Column(String, nullable=True)
+    contract_id = Column(String, nullable=True)
+    result = Column(String, nullable=True)
+    payout = Column(Float, nullable=True)
+    tech_score = Column(Float, nullable=True)
+    ai_score = Column(Float, nullable=True)
+    confidence = Column(Float, nullable=True)
+    regime = Column(String, nullable=True)
+    error_reason = Column(String, nullable=True)
+    closed_timestamp = Column(DateTime, nullable=True)
     timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+class SystemLog(Base):
+    __tablename__ = "system_logs"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    symbol = Column(String, index=True, nullable=False)
+    tech_score = Column(Float, nullable=True)
+    ai_score = Column(Float, nullable=True)
+    combined_confidence = Column(Float, nullable=True)
+    regime = Column(String, nullable=True)
+    is_volatile = Column(Integer, nullable=True) # boolean as integer for sqlite compat
+    signal = Column(String, nullable=False)
+    error_warning = Column(String, nullable=True)
 
 def init_db():
     try:

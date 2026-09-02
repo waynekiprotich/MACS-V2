@@ -11,7 +11,7 @@ def detect_regime(df: pd.DataFrame) -> pd.DataFrame:
 
     df = df.copy()
     try:
-        df['Regime'] = 'bearish'
+        df['Regime'] = 'neutral'
         
         # Trend conditions
         bullish_condition = (df['Close'] > df['SMA_50']) & (df['Close'] > df['SMA_200']) & (df['SMA_50'] > df['SMA_200'])

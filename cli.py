@@ -6,7 +6,12 @@ from rich.console import Console
 from rich.table import Table
 from rich.logging import RichHandler
 
-logging.basicConfig(level=logging.INFO, handlers=[RichHandler()])
+from logging.handlers import RotatingFileHandler
+
+file_handler = RotatingFileHandler("macs.log", maxBytes=5*1024*1024, backupCount=5)
+file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+
+logging.basicConfig(level=logging.INFO, handlers=[RichHandler(), file_handler])
 logger = logging.getLogger("macs")
 console = Console()
 
@@ -31,7 +36,36 @@ def analyze(symbols, no_ai, dry_run):
     pipeline = TradingPipeline(symbol_list)
 
     console.print(f"[bold cyan]MACS Analyze[/] — {symbol_list}")
-    results = pipeline.run(execute=not dry_run)
+    try:
+        results = pipeline.run(execute=not dry_run)
+        
+        # Periodic Heartbeat Tracking (1 hour = 4 cycles of 15 min)
+        import os, json
+        state_file = ".heartbeat_state.json"
+        try:
+            with open(state_file, "r") as f:
+                state = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            state = {"cycles": 0}
+            
+        state["cycles"] += 1
+        
+        if state["cycles"] >= 4:
+            from core.notifications import send_heartbeat
+            summary = ", ".join([f"{k}={v}" for k, v in results.items()])
+            from datetime import datetime
+            time_str = datetime.now().strftime("%H:%M")
+            send_heartbeat(status=f"Last cycle at {time_str} — {summary}")
+            state["cycles"] = 0
+            
+        with open(state_file, "w") as f:
+            json.dump(state, f)
+            
+    except Exception as e:
+        logger.error(f"Pipeline crashed: {e}")
+        from core.notifications import send_heartbeat
+        send_heartbeat(status=f"Crash: {e}")
+        raise
 
     if results is None:
         results = {}
@@ -44,30 +78,35 @@ def analyze(symbols, no_ai, dry_run):
     table.add_column("Reason")
 
     for sym, res in results.items():
-        action = res.get("action", "error")
-        conf = res.get("confidence", 0)
-        tp = res.get("take_profit", "-")
-        sl = res.get("stop_loss", "-")
-        reason = res.get("reason", "")
+        if isinstance(res, str):
+            action = res
+            conf, tp, sl, reason = 0, "-", "-", "Skipped or Blocked"
+        else:
+            action = res.get("action", "error")
+            conf = res.get("confidence", 0)
+            tp = res.get("take_profit", "-")
+            sl = res.get("stop_loss", "-")
+            reason = res.get("reason", "")
         action_style = "green" if action == "buy" else "red" if action == "sell" else "yellow"
         table.add_row(sym, f"[{action_style}]{action.upper()}[/]", str(conf), f"{tp} / {sl}", reason[:60])
 
     console.print(table)
 
 
-@cli.command()
+@cli.command(name="equity-backtest")
 @click.option("--symbol", default="SPY", help="Symbol to backtest")
 @click.option("--days", default=365, help="Days of backtest data")
 def backtest(symbol, days):
-    """Run backtest simulation."""
+    """Run equity backtest simulation (NOTE: Does NOT represent Deriv Rise/Fall options)."""
     import yfinance as yf
     import pandas as pd
     from core.indicators import compute_all_indicators
     from core.regime import RegimeDetector
     from strategies.ultra_filtered import UltraFilteredStrategy
     from config.settings import HIGH_WIN_CONFIG
-
-    console.print(f"[bold cyan]MACS Backtest[/] — {symbol} ({days}d)")
+    
+    console.print("[bold red]WARNING: This backtester uses yfinance daily data and models standard equity trading. It does NOT model Deriv's fixed-payout intraday options contracts.[/]")
+    console.print(f"[bold cyan]MACS Equity Backtest[/] — {symbol} ({days}d)")
 
     ticker = yf.Ticker(symbol)
     df = ticker.history(period=f"{days}d", interval="1d")

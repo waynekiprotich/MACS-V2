@@ -72,11 +72,13 @@ class DerivEngine(BaseEngine):
             
             return {
                 "contract_id": contract_id,
+                "proposal_id": proposal_id,
                 "buy_price": buy_price,
                 "contract_type": contract_type
             }
 
-    def execute_signal(self, symbol: str, signal: str, quantity: float, price: float, reason: str = "") -> dict:
+    def execute_signal(self, symbol: str, signal: str, quantity: float, price: float, reason: str = "",
+                       tech_score: float = None, ai_score: float = None, confidence: float = None, regime: str = None) -> dict:
         """
         Synchronous wrapper to execute a contract and log it.
         """
@@ -99,12 +101,22 @@ class DerivEngine(BaseEngine):
                 side=signal.upper(),
                 quantity=quantity,
                 price=result['buy_price'], # Use the actual stake charged
-                status="closed",  # We log options as closed immediately for simplicity, or "open" if we track them
-                reason=reason
+                status="OPEN",  # Contract is open until reconciled
+                reason=reason,
+                contract_id=str(result['contract_id']),
+                proposal_id=str(result.get('proposal_id', '')),
+                tech_score=tech_score,
+                ai_score=ai_score,
+                confidence=confidence,
+                regime=regime
             )
             db.add(trade)
             db.commit()
             db.refresh(trade)
+            
+            t_score = tech_score if tech_score is not None else 0.0
+            c_score = confidence if confidence is not None else 0.0
+            r_str = regime if regime is not None else "unknown"
             
             # Send Discord Alert
             send_discord_signal(
@@ -112,8 +124,8 @@ class DerivEngine(BaseEngine):
                 side=signal.upper(),
                 price=result['buy_price'],
                 strategy="Deriv Engine",
-                ai_score=None,
-                notes=f"{reason} | Contract: {result['contract_id']}"
+                ai_score=ai_score,
+                notes=f"Tech:{t_score:.1f} | Conf:{c_score:.1f} | Reg:{r_str} | ID:{result['contract_id']}"
             )
             
             return {"status": "success", "trade_id": trade.id, "contract_id": result['contract_id']}
@@ -129,3 +141,66 @@ class DerivEngine(BaseEngine):
 
     def get_account_summary(self) -> dict:
         return {"balance": 0.0}
+
+    async def _reconcile_contract(self, ws, contract_id: str):
+        req = {
+            "proposal_open_contract": 1,
+            "contract_id": int(contract_id)
+        }
+        await ws.send(json.dumps(req))
+        resp = json.loads(await ws.recv())
+        return resp.get("proposal_open_contract")
+
+    def reconcile_open_contracts(self):
+        """Finds OPEN contracts in DB, asks Deriv for status, and updates DB."""
+        db = SessionLocal()
+        try:
+            open_trades = db.query(PaperTrade).filter(PaperTrade.status == "OPEN").all()
+            if not open_trades:
+                return
+                
+            logger.info(f"Reconciling {len(open_trades)} OPEN contracts...")
+            
+            headers = {
+                'Authorization': f'Bearer {self.token}',
+                'Deriv-App-ID': self.app_id,
+                'Content-Type': 'application/json'
+            }
+            resp = requests.post(f'https://api.derivws.com/trading/v1/options/accounts/{self.account_id}/otp', headers=headers)
+            if resp.status_code != 200:
+                logger.error("Reconciliation failed to get OTP.")
+                return
+                
+            ws_url = resp.json()['data']['url']
+            
+            async def run_recon():
+                async with websockets.connect(ws_url) as ws:
+                    from datetime import datetime, timezone
+                    for trade in open_trades:
+                        if not trade.contract_id:
+                            continue
+                        contract_info = await self._reconcile_contract(ws, trade.contract_id)
+                        if not contract_info:
+                            continue
+                            
+                        # is_sold == 1 or status in ('won', 'lost') means it's closed
+                        if contract_info.get('is_sold') == 1 or contract_info.get('status') in ('won', 'lost'):
+                            status_str = contract_info.get('status', 'unknown')
+                            trade.status = "CLOSED"
+                            trade.result = status_str.upper()
+                            trade.payout = float(contract_info.get('sell_price', 0) or contract_info.get('payout', 0))
+                            trade.pnl = float(contract_info.get('profit', 0))
+                            trade.closed_timestamp = datetime.now(timezone.utc)
+                            logger.info(f"Reconciled contract {trade.contract_id}: {trade.result} | PnL: {trade.pnl}")
+            
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(run_recon())
+            loop.close()
+            
+            db.commit()
+        except Exception as e:
+            logger.error(f"Reconciliation error: {e}")
+            db.rollback()
+        finally:
+            db.close()

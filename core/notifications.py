@@ -42,5 +42,26 @@ def send_discord_signal(symbol: str, side: str, price: float, strategy: str, ai_
     try:
         response = requests.post(webhook_url, json=payload, timeout=5.0)
         response.raise_for_status()
+        logger.info(f"Discord webhook sent successfully. Status code: {response.status_code}")
     except requests.exceptions.RequestException as e:
         logger.error(f"Failed to send Discord notification: {e}")
+
+def send_heartbeat(status: str):
+    """Sends a lightweight heartbeat to Discord."""
+    webhook_url = settings.DISCORD_WEBHOOK_URL
+    if not webhook_url:
+        return
+        
+    payload = {
+        "embeds": [{
+            "title": "💓 MACS-V2 Heartbeat",
+            "description": f"Cycle completed. Status: {status}",
+            "color": 0x00FF00 if "Success" in status else 0xFFA500
+        }]
+    }
+    
+    try:
+        response = requests.post(webhook_url, json=payload, timeout=5.0)
+        logger.info(f"Heartbeat sent successfully. Status code: {response.status_code}")
+    except Exception as e:
+        logger.error(f"Failed to send heartbeat: {e}")

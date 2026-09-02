@@ -24,44 +24,61 @@ class DerivDataProvider:
             'Content-Type': 'application/json'
         }
         
-        # 1. Fetch OTP
-        resp = requests.post(f'https://api.derivws.com/trading/v1/options/accounts/{self.account_id}/otp', headers=headers)
-        resp.raise_for_status()
-        ws_url = resp.json()['data']['url']
-        
-        # 2. Connect to WS
-        async with websockets.connect(ws_url) as ws:
-            req = {
-                "ticks_history": symbol,
-                "end": "latest",
-                "count": count,
-                "granularity": granularity,
-                "style": "candles"
-            }
-            await ws.send(json.dumps(req))
-            response = await ws.recv()
-            data = json.loads(response)
+        try:
+            # 1. Fetch OTP with timeout
+            resp = requests.post(
+                f'https://api.derivws.com/trading/v1/options/accounts/{self.account_id}/otp', 
+                headers=headers,
+                timeout=10
+            )
+            resp.raise_for_status()
+            ws_url = resp.json()['data']['url']
             
-            if 'error' in data:
-                logger.error(f"Error fetching data for {symbol}: {data['error']}")
-                return pd.DataFrame()
+            # 2. Connect to WS with timeout
+            async with websockets.connect(ws_url, close_timeout=5) as ws:
+                req = {
+                    "ticks_history": symbol,
+                    "end": "latest",
+                    "count": count,
+                    "granularity": granularity,
+                    "style": "candles"
+                }
+                await asyncio.wait_for(ws.send(json.dumps(req)), timeout=10.0)
                 
-            candles = data.get('candles', [])
-            if not candles:
-                logger.warning(f"No candles returned for {symbol}")
-                return pd.DataFrame()
+                # Fetch response with strict timeout to prevent indefinite hangs
+                response = await asyncio.wait_for(ws.recv(), timeout=30.0)
+                data = json.loads(response)
                 
-            # 3. Format DataFrame
-            df = pd.DataFrame(candles)
-            df['Datetime'] = pd.to_datetime(df['epoch'], unit='s')
-            df.set_index('Datetime', inplace=True)
-            df.rename(columns={'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close'}, inplace=True)
-            # Deriv doesn't provide Volume for these instruments, mock it so indicators don't crash
-            df['Volume'] = 1000.0
-            
-            # Reorder columns
-            df = df[['Open', 'High', 'Low', 'Close', 'Volume']]
-            return df
+                if 'error' in data:
+                    logger.error(f"Error fetching data for {symbol}: {data['error']}")
+                    return pd.DataFrame()
+                    
+                candles = data.get('candles', [])
+                if not candles:
+                    logger.warning(f"No candles returned for {symbol}")
+                    return pd.DataFrame()
+                    
+                # 3. Format DataFrame
+                df = pd.DataFrame(candles)
+                df['Datetime'] = pd.to_datetime(df['epoch'], unit='s')
+                df.set_index('Datetime', inplace=True)
+                df.rename(columns={'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close'}, inplace=True)
+                # Deriv doesn't provide Volume for these instruments, mock it so indicators don't crash
+                df['Volume'] = 1000.0
+                
+                # Reorder columns
+                df = df[['Open', 'High', 'Low', 'Close', 'Volume']]
+                return df
+                
+        except asyncio.TimeoutError:
+            logger.error(f"Timeout fetching candles for {symbol} (network hung)")
+            return pd.DataFrame()
+        except requests.exceptions.RequestException as e:
+            logger.error(f"REST API error fetching OTP for {symbol}: {e}")
+            return pd.DataFrame()
+        except Exception as e:
+            logger.error(f"WebSocket/Network error fetching candles for {symbol}: {e}")
+            return pd.DataFrame()
 
     def fetch_data(self, symbol: str, period: str = '60d', interval: str = '15m') -> pd.DataFrame:
         """
